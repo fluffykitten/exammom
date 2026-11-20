@@ -20,8 +20,10 @@ A configurable Next.js + Supabase web application for generating, storing, and s
 
 ## Setup Instructions
 
-1. **Install dependencies**:
+1. **Clone the repository and install dependencies**:
    ```bash
+   git clone https://github.com/fluffykitten/exammom.git
+   cd exammom
    npm install
    ```
 
