@@ -47,6 +47,26 @@ A configurable Next.js + Supabase web application for generating, storing, and s
 
 ## Tech Stack
 
-- **Framework**: Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS
+- **Framework**: Next.js 15 (App Router, static export `out/`), React 19, TypeScript, Tailwind CSS
 - **PDF Generation**: `@react-pdf/renderer`
 - **Backend / Storage / Auth**: Supabase (`@supabase/supabase-js`, `@supabase/ssr`)
+- **Hosting**: Cloudflare Workers Static Assets (`cloudflare.config.ts` / `cf` CLI) or Cloudflare Pages (`out/`)
+
+## Deploy to Cloudflare
+
+### Option 1: Cloudflare Workers Static Assets (`cf` CLI — Recommended)
+1. Sign in once with the Cloudflare CLI:
+   ```bash
+   npx cf auth login
+   ```
+2. Build the static export (`out/`) and deploy to `https://exammom.icmadani.workers.dev`:
+   ```bash
+   npm run deploy
+   ```
+
+### Option 2: Cloudflare Pages (Git Integration)
+- **Build command:** `npm run build`
+- **Build output directory:** `out`
+- **Environment variables:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+*(After deploying, add the live URL to **Supabase Dashboard → Authentication → URL Configuration** so Admin sign-in works on the deployed domain.)*
