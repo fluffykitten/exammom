@@ -34,6 +34,11 @@ export function SubmissionsClient() {
   const [filterSubject, setFilterSubject] = useState("");
 
   const [roomOptions, setRoomOptions] = useState<string[]>([]);
+  const [sessionOptions, setSessionOptions] = useState<string[]>([
+    "1st",
+    "2nd",
+    "3rd",
+  ]);
   const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
 
   const [previewItem, setPreviewItem] = useState<Submission | null>(null);
@@ -51,6 +56,10 @@ export function SubmissionsClient() {
     if (subRes.error) setErrorMsg(subRes.error);
 
     setRoomOptions(boot.rooms.map((r) => r.name));
+    const sessField = boot.fields.find((f) => f.field_key === "session");
+    if (sessField && Array.isArray(sessField.options) && sessField.options.length > 0) {
+      setSessionOptions(sessField.options);
+    }
     const subjField = boot.fields.find((f) => f.field_key === "subjects");
     if (subjField && Array.isArray(subjField.options)) {
       setSubjectOptions(subjField.options);
@@ -298,8 +307,11 @@ export function SubmissionsClient() {
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-[#1e3a5f] focus:outline-none"
             >
               <option value="">All Sessions</option>
-              <option value="1st">1st</option>
-              <option value="2nd">2nd</option>
+              {sessionOptions.map((sess) => (
+                <option key={sess} value={sess}>
+                  {sess}
+                </option>
+              ))}
             </select>
             <select
               value={filterSubject}

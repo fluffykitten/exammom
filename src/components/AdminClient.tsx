@@ -17,6 +17,8 @@ import {
   Upload,
   CheckCircle2,
   AlertCircle,
+  UserPlus,
+  RefreshCw,
 } from "lucide-react";
 import { fetchBootstrapData, uploadHeaderLogo } from "@/lib/data-service";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -89,13 +91,25 @@ export function AdminClient() {
   // Rooms & Students state
   const [selectedRoomId, setSelectedRoomId] = useState<string>("");
   const [newRoomName, setNewRoomName] = useState("");
-  const [newRoomCategory, setNewRoomCategory] = useState<"AKHWAT" | "IKHWAN">(
-    "AKHWAT"
-  );
+  const [newRoomCategory, setNewRoomCategory] = useState<
+    "AKHWAT" | "IKHWAN" | "LAB"
+  >("AKHWAT");
   const [newStudentNis, setNewStudentNis] = useState("");
   const [newStudentName, setNewStudentName] = useState("");
   const [newStudentKelas, setNewStudentKelas] = useState("");
   const [bulkCsv, setBulkCsv] = useState("");
+  const [syncingDefaults, setSyncingDefaults] = useState(false);
+
+  // Assign existing students state
+  const [showAssignPanel, setShowAssignPanel] = useState(false);
+  const [assignSourceRoomId, setAssignSourceRoomId] = useState<string>("");
+  const [assignClassFilter, setAssignClassFilter] = useState<string>("");
+  const [assignSearch, setAssignSearch] = useState("");
+  const [assignMode, setAssignMode] = useState<"copy" | "move">("copy");
+  const [selectedAssignIds, setSelectedAssignIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [assigningStudents, setAssigningStudents] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -341,6 +355,163 @@ export function AdminClient() {
     [students, selectedRoomId]
   );
 
+  const missingDefaultRooms = useMemo(
+    () =>
+      DEFAULT_ROOMS.filter(
+        (d) => !rooms.some((r) => r.name.toUpperCase() === d.name.toUpperCase())
+      ),
+    [rooms]
+  );
+
+  const sessionField = useMemo(
+    () => fields.find((f) => f.field_key === "session") || null,
+    [fields]
+  );
+
+  const missingThirdSession = useMemo(() => {
+    if (!sessionField || !Array.isArray(sessionField.options)) return false;
+    return !sessionField.options.includes("3rd");
+  }, [sessionField]);
+
+  const handleSyncMissingDefaults = async () => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    setSyncingDefaults(true);
+
+    try {
+      if (missingDefaultRooms.length > 0) {
+        const { data: roomRows, error: roomErr } = await supabase
+          .from("rooms")
+          .upsert(
+            missingDefaultRooms.map((r) => ({
+              name: r.name,
+              category: r.category,
+              sort_order: r.sort_order,
+              is_active: r.is_active,
+            })),
+            { onConflict: "name" }
+          )
+          .select("*");
+        if (roomErr) throw roomErr;
+
+        const insertedRooms = (roomRows as Room[]) ?? [];
+        const roomIdBySeedId = new Map<string, string>();
+        for (const seedRoom of missingDefaultRooms) {
+          const match = insertedRooms.find(
+            (r) => r.name.toUpperCase() === seedRoom.name.toUpperCase()
+          );
+          if (match) roomIdBySeedId.set(seedRoom.id, match.id);
+        }
+
+        const studentSeeds = DEFAULT_STUDENTS.filter((st) =>
+          roomIdBySeedId.has(st.room_id)
+        ).map((st) => ({
+          room_id: roomIdBySeedId.get(st.room_id)!,
+          student_no: st.student_no,
+          nis: st.nis,
+          name: st.name,
+          kelas: st.kelas,
+          is_active: st.is_active,
+        }));
+
+        if (studentSeeds.length > 0) {
+          const { error: stErr } = await supabase
+            .from("students")
+            .upsert(studentSeeds, {
+              onConflict: "room_id,nis",
+              ignoreDuplicates: true,
+            });
+          if (stErr) throw stErr;
+        }
+      }
+
+      if (missingThirdSession && sessionField) {
+        const currentOpts = Array.isArray(sessionField.options)
+          ? sessionField.options
+          : [];
+        const nextOpts = [...currentOpts, "3rd"];
+        const { error: sessErr } = await supabase
+          .from("form_fields")
+          .update({ options: nextOpts })
+          .eq("id", sessionField.id);
+        if (sessErr) throw sessErr;
+      }
+
+      await loadData();
+      flash("ok", "Synced new rooms, student rosters, and 3rd session.");
+    } catch (err) {
+      flash(
+        "err",
+        err instanceof Error ? err.message : "Failed to sync default updates."
+      );
+    } finally {
+      setSyncingDefaults(false);
+    }
+  };
+
+  const selectedRoomNisSet = useMemo(
+    () => new Set(selectedRoomStudents.map((s) => s.nis.trim().toLowerCase())),
+    [selectedRoomStudents]
+  );
+
+  const availableClasses = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          students.map((s) => s.kelas.trim()).filter((k) => k && k !== "-")
+        )
+      ).sort(),
+    [students]
+  );
+
+  const roomNameById = useMemo(
+    () => new Map(rooms.map((r) => [r.id, r.name])),
+    [rooms]
+  );
+
+  const assignCandidates = useMemo(() => {
+    const q = assignSearch.trim().toLowerCase();
+    const seenNis = new Set<string>();
+    const list: Student[] = [];
+
+    for (const st of students) {
+      if (st.room_id === selectedRoomId) continue;
+      if (assignSourceRoomId && st.room_id !== assignSourceRoomId) continue;
+      if (assignClassFilter && st.kelas !== assignClassFilter) continue;
+      if (
+        q &&
+        !st.name.toLowerCase().includes(q) &&
+        !st.nis.toLowerCase().includes(q) &&
+        !st.kelas.toLowerCase().includes(q)
+      ) {
+        continue;
+      }
+      const normNis = st.nis.trim().toLowerCase();
+      // Avoid duplicate student entries when browsing all rooms in copy mode
+      if (assignMode === "copy" && !assignSourceRoomId) {
+        if (seenNis.has(normNis)) continue;
+        seenNis.add(normNis);
+      }
+      list.push(st);
+    }
+    return list.sort((a, b) => a.name.localeCompare(b.name));
+  }, [
+    students,
+    selectedRoomId,
+    assignSourceRoomId,
+    assignClassFilter,
+    assignSearch,
+    assignMode,
+  ]);
+
+  const selectableCandidates = useMemo(
+    () =>
+      assignCandidates.filter(
+        (st) => !selectedRoomNisSet.has(st.nis.trim().toLowerCase())
+      ),
+    [assignCandidates, selectedRoomNisSet]
+  );
+
   const handleAddRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoomName.trim()) return;
@@ -364,8 +535,126 @@ export function AdminClient() {
     const created = data as Room;
     setRooms((prev) => [...prev, created]);
     setSelectedRoomId(created.id);
+    setSelectedAssignIds(new Set());
     setNewRoomName("");
     flash("ok", `Added room "${created.name}".`);
+  };
+
+  const toggleAssignCandidate = (id: string) => {
+    setSelectedAssignIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllCandidates = () => {
+    const allSelected =
+      selectableCandidates.length > 0 &&
+      selectableCandidates.every((c) => selectedAssignIds.has(c.id));
+    if (allSelected) {
+      setSelectedAssignIds((prev) => {
+        const next = new Set(prev);
+        for (const c of selectableCandidates) next.delete(c.id);
+        return next;
+      });
+      return;
+    }
+    setSelectedAssignIds((prev) => {
+      const next = new Set(prev);
+      for (const c of selectableCandidates) next.add(c.id);
+      return next;
+    });
+  };
+
+  const handleAssignSelected = async () => {
+    if (!selectedRoomId || selectedAssignIds.size === 0) return;
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+
+    const picked = selectableCandidates.filter((s) =>
+      selectedAssignIds.has(s.id)
+    );
+    if (picked.length === 0) return;
+
+    setAssigningStudents(true);
+    let nextNo =
+      selectedRoomStudents.reduce((m, s) => Math.max(m, s.student_no), 0) + 1;
+
+    if (assignMode === "copy") {
+      const uniquePicked: Student[] = [];
+      const seen = new Set<string>();
+      for (const st of picked) {
+        const key = st.nis.trim().toLowerCase();
+        if (seen.has(key) || selectedRoomNisSet.has(key)) continue;
+        seen.add(key);
+        uniquePicked.push(st);
+      }
+
+      const rows = uniquePicked.map((st) => ({
+        room_id: selectedRoomId,
+        student_no: nextNo++,
+        nis: st.nis,
+        name: st.name,
+        kelas: st.kelas,
+        is_active: true,
+      }));
+
+      const { data, error } = await supabase
+        .from("students")
+        .insert(rows)
+        .select("*");
+      setAssigningStudents(false);
+      if (error) {
+        flash("err", error.message);
+        return;
+      }
+      setStudents((prev) => [...prev, ...((data as Student[]) ?? [])]);
+      setSelectedAssignIds(new Set());
+      flash("ok", `Assigned ${rows.length} student(s) to room.`);
+      return;
+    }
+
+    const seenMoveNis = new Set<string>();
+    const movable: { id: string; student_no: number }[] = [];
+    for (const st of picked) {
+      const key = st.nis.trim().toLowerCase();
+      if (seenMoveNis.has(key) || selectedRoomNisSet.has(key)) continue;
+      seenMoveNis.add(key);
+      movable.push({ id: st.id, student_no: nextNo++ });
+    }
+
+    const results = await Promise.all(
+      movable.map((item) =>
+        supabase
+          .from("students")
+          .update({ room_id: selectedRoomId, student_no: item.student_no })
+          .eq("id", item.id)
+          .select("*")
+          .single()
+      )
+    );
+    setAssigningStudents(false);
+
+    const firstErr = results.find((r) => r.error)?.error;
+    if (firstErr) {
+      flash("err", firstErr.message);
+      await loadData();
+      return;
+    }
+
+    const updatedById = new Map(
+      results
+        .filter((r) => r.data)
+        .map((r) => [(r.data as Student).id, r.data as Student])
+    );
+    setStudents((prev) => prev.map((s) => updatedById.get(s.id) ?? s));
+    setSelectedAssignIds(new Set());
+    flash("ok", `Moved ${movable.length} student(s) to room.`);
   };
 
   const handleAddStudent = async (e: React.FormEvent) => {
@@ -409,6 +698,31 @@ export function AdminClient() {
     setStudents((prev) => prev.filter((x) => x.id !== st.id));
   };
 
+  const handleClearRoomStudents = async () => {
+    if (!selectedRoomId || selectedRoomStudents.length === 0) return;
+    const roomName =
+      rooms.find((r) => r.id === selectedRoomId)?.name || "this room";
+    if (
+      !confirm(
+        `Remove all ${selectedRoomStudents.length} student(s) from ${roomName}?`
+      )
+    ) {
+      return;
+    }
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+    const { error } = await supabase
+      .from("students")
+      .delete()
+      .eq("room_id", selectedRoomId);
+    if (error) {
+      flash("err", error.message);
+      return;
+    }
+    setStudents((prev) => prev.filter((s) => s.room_id !== selectedRoomId));
+    flash("ok", `Cleared all students from ${roomName}.`);
+  };
+
   const handleBulkImport = async () => {
     if (!selectedRoomId || !bulkCsv.trim()) return;
     const supabase = getSupabaseBrowserClient();
@@ -419,27 +733,50 @@ export function AdminClient() {
       .filter(Boolean);
     let nextNo =
       selectedRoomStudents.reduce((m, s) => Math.max(m, s.student_no), 0) + 1;
-    const rows = lines.map((line) => {
+    const seen = new Set(selectedRoomNisSet);
+    const rows: {
+      room_id: string;
+      student_no: number;
+      nis: string;
+      name: string;
+      kelas: string;
+      is_active: boolean;
+    }[] = [];
+    let skipped = 0;
+
+    for (const line of lines) {
       const parts = line.split(/[,\t;]/).map((p) => p.trim());
-      if (parts.length >= 4 && /^\d+$/.test(parts[0])) {
-        return {
-          room_id: selectedRoomId,
-          student_no: Number(parts[0]),
-          nis: parts[1],
-          name: parts[2].toUpperCase(),
-          kelas: parts[3].toUpperCase(),
-          is_active: true,
-        };
+      const parsed =
+        parts.length >= 4 && /^\d+$/.test(parts[0])
+          ? {
+              student_no: Number(parts[0]),
+              nis: parts[1],
+              name: parts[2].toUpperCase(),
+              kelas: parts[3].toUpperCase(),
+            }
+          : {
+              student_no: nextNo++,
+              nis: parts[0] || "-",
+              name: (parts[1] || "UNNAMED").toUpperCase(),
+              kelas: (parts[2] || "-").toUpperCase(),
+            };
+      const nisKey = parsed.nis.trim().toLowerCase();
+      if (seen.has(nisKey)) {
+        skipped++;
+        continue;
       }
-      return {
+      seen.add(nisKey);
+      rows.push({
         room_id: selectedRoomId,
-        student_no: nextNo++,
-        nis: parts[0] || "-",
-        name: (parts[1] || "UNNAMED").toUpperCase(),
-        kelas: (parts[2] || "-").toUpperCase(),
+        ...parsed,
         is_active: true,
-      };
-    });
+      });
+    }
+
+    if (rows.length === 0) {
+      flash("err", "All listed NIS values are already assigned to this room.");
+      return;
+    }
 
     const { data, error } = await supabase
       .from("students")
@@ -451,7 +788,12 @@ export function AdminClient() {
     }
     setStudents((prev) => [...prev, ...((data as Student[]) ?? [])]);
     setBulkCsv("");
-    flash("ok", `Imported ${rows.length} students into room.`);
+    flash(
+      "ok",
+      skipped > 0
+        ? `Imported ${rows.length} student(s) (${skipped} duplicate skipped).`
+        : `Imported ${rows.length} student(s) into room.`
+    );
   };
 
   if (loading) {
@@ -905,27 +1247,59 @@ export function AdminClient() {
           {/* Rooms List */}
           <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs">
             <h2 className="text-sm font-bold text-slate-900">Exam Rooms</h2>
+            {(missingDefaultRooms.length > 0 || missingThirdSession) && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                <div className="font-semibold">Database updates available</div>
+                <p className="mt-0.5 text-[11px] text-amber-800">
+                  {missingDefaultRooms.length > 0
+                    ? `${missingDefaultRooms.length} new room(s) with student rosters`
+                    : ""}
+                  {missingDefaultRooms.length > 0 && missingThirdSession
+                    ? " and "
+                    : ""}
+                  {missingThirdSession ? "3rd session option" : ""} can be synced.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleSyncMissingDefaults}
+                  disabled={syncingDefaults}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#1e3a5f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#162d4a] focus-visible:ring-2 focus-visible:ring-[#1e3a5f] focus-visible:ring-offset-1 focus-visible:outline-none disabled:opacity-60"
+                >
+                  {syncingDefaults ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  Sync Updates
+                </button>
+              </div>
+            )}
+
             <form onSubmit={handleAddRoom} className="flex gap-2">
               <input
                 type="text"
                 placeholder="New room name..."
                 value={newRoomName}
                 onChange={(e) => setNewRoomName(e.target.value)}
-                className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs"
+                className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
               />
               <select
                 value={newRoomCategory}
                 onChange={(e) =>
-                  setNewRoomCategory(e.target.value as "AKHWAT" | "IKHWAN")
+                  setNewRoomCategory(
+                    e.target.value as "AKHWAT" | "IKHWAN" | "LAB"
+                  )
                 }
-                className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
+                aria-label="Room category"
+                className="rounded-lg border border-slate-300 px-2 py-1.5 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
               >
+                <option value="LAB">LAB</option>
                 <option value="AKHWAT">AKHWAT</option>
                 <option value="IKHWAN">IKHWAN</option>
               </select>
               <button
                 type="submit"
-                className="rounded-lg bg-[#1e3a5f] px-3 py-1.5 text-xs font-semibold text-white"
+                className="rounded-lg bg-[#1e3a5f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#162d4a] focus-visible:ring-2 focus-visible:ring-[#1e3a5f] focus-visible:ring-offset-1 focus-visible:outline-none"
               >
                 Add
               </button>
@@ -939,19 +1313,24 @@ export function AdminClient() {
                   <button
                     key={rm.id}
                     type="button"
-                    onClick={() => setSelectedRoomId(rm.id)}
-                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition ${
+                    onClick={() => {
+                      setSelectedRoomId(rm.id);
+                      setSelectedAssignIds(new Set());
+                    }}
+                    className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition focus-visible:ring-2 focus-visible:ring-[#1e3a5f] focus-visible:outline-none ${
                       active
                         ? "bg-[#1e3a5f] text-white"
                         : "bg-slate-50 text-slate-700 hover:bg-slate-100"
                     }`}
                   >
-                    <span>{rm.name}</span>
+                    <span className="truncate">{rm.name}</span>
                     <span
-                      className={`rounded-full px-2 py-0.5 text-[11px] ${
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
                         active
                           ? "bg-white/20 text-white"
-                          : "bg-slate-200 text-slate-600"
+                          : count === 0
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-slate-200 text-slate-700"
                       }`}
                     >
                       {count}
@@ -964,13 +1343,211 @@ export function AdminClient() {
 
           {/* Selected Room Students */}
           <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs lg:col-span-2">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-bold text-slate-900">
                 Students in{" "}
                 {rooms.find((r) => r.id === selectedRoomId)?.name || "Room"} (
                 {selectedRoomStudents.length})
               </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAssignPanel((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition focus-visible:ring-2 focus-visible:ring-[#1e3a5f] focus-visible:outline-none ${
+                    showAssignPanel
+                      ? "border-[#1e3a5f] bg-[#1e3a5f] text-white"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  {showAssignPanel ? "Hide Student Picker" : "Assign Existing Students"}
+                </button>
+                {selectedRoomStudents.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearRoomStudents}
+                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:outline-none"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Clear Room
+                  </button>
+                )}
+              </div>
             </div>
+
+            {/* Assign Existing Students Picker */}
+            {showAssignPanel && (
+              <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">
+                      Assign Students from Existing Roster
+                    </div>
+                    <p className="text-[11px] text-slate-600">
+                      Copy keeps students in their original room (recommended for labs); Move transfers them here.
+                    </p>
+                  </div>
+                  <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssignMode("copy");
+                        setSelectedAssignIds(new Set());
+                      }}
+                      className={`rounded-md px-2.5 py-1 font-semibold transition ${
+                        assignMode === "copy"
+                          ? "bg-[#1e3a5f] text-white"
+                          : "text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      Copy to room
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssignMode("move");
+                        setSelectedAssignIds(new Set());
+                      }}
+                      className={`rounded-md px-2.5 py-1 font-semibold transition ${
+                        assignMode === "move"
+                          ? "bg-[#1e3a5f] text-white"
+                          : "text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      Move to room
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <input
+                    type="text"
+                    value={assignSearch}
+                    onChange={(e) => setAssignSearch(e.target.value)}
+                    placeholder="Search name, NIS, or class..."
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
+                  />
+                  <select
+                    value={assignSourceRoomId}
+                    onChange={(e) => {
+                      setAssignSourceRoomId(e.target.value);
+                      setSelectedAssignIds(new Set());
+                    }}
+                    aria-label="Filter by source room"
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
+                  >
+                    <option value="">All Source Rooms</option>
+                    {rooms
+                      .filter((r) => r.id !== selectedRoomId)
+                      .map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                  </select>
+                  <select
+                    value={assignClassFilter}
+                    onChange={(e) => {
+                      setAssignClassFilter(e.target.value);
+                      setSelectedAssignIds(new Set());
+                    }}
+                    aria-label="Filter by class"
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
+                  >
+                    <option value="">All Classes</option>
+                    {availableClasses.map((cls) => (
+                      <option key={cls} value={cls}>
+                        {cls}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={handleSelectAllCandidates}
+                    disabled={selectableCandidates.length === 0}
+                    className="font-semibold text-[#1e3a5f] hover:underline disabled:text-slate-400 disabled:no-underline"
+                  >
+                    {selectableCandidates.length > 0 &&
+                    selectableCandidates.every((c) => selectedAssignIds.has(c.id))
+                      ? `Deselect all shown (${selectableCandidates.length})`
+                      : `Select all shown (${selectableCandidates.length})`}
+                  </button>
+                  <span className="text-slate-600">
+                    {selectedAssignIds.size} selected
+                  </span>
+                </div>
+
+                <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+                  {assignCandidates.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-xs text-slate-600">
+                      No matching students found in other rooms. Try clearing your search or filters.
+                    </div>
+                  ) : (
+                    assignCandidates.map((st) => {
+                      const alreadyInRoom = selectedRoomNisSet.has(
+                        st.nis.trim().toLowerCase()
+                      );
+                      const checked = selectedAssignIds.has(st.id);
+                      const sourceRoomName = roomNameById.get(st.room_id) || "";
+                      return (
+                        <label
+                          key={st.id}
+                          className={`flex items-center justify-between gap-3 px-3 py-2 text-xs ${
+                            alreadyInRoom
+                              ? "cursor-not-allowed bg-slate-50 text-slate-500"
+                              : "cursor-pointer hover:bg-slate-50"
+                          }`}
+                        >
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <input
+                              type="checkbox"
+                              disabled={alreadyInRoom}
+                              checked={checked}
+                              onChange={() => toggleAssignCandidate(st.id)}
+                              className="h-4 w-4 rounded border-slate-300 accent-[#1e3a5f]"
+                            />
+                            <div className="min-w-0">
+                              <div className="truncate font-semibold text-slate-900">
+                                {st.name}
+                              </div>
+                              <div className="text-[11px] text-slate-600">
+                                NIS: {st.nis} • {st.kelas}
+                                {sourceRoomName ? ` • ${sourceRoomName}` : ""}
+                              </div>
+                            </div>
+                          </div>
+                          {alreadyInRoom && (
+                            <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                              Already in room
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleAssignSelected}
+                    disabled={assigningStudents || selectedAssignIds.size === 0}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#1e3a5f] px-4 py-2 text-xs font-semibold text-white hover:bg-[#162d4a] focus-visible:ring-2 focus-visible:ring-[#1e3a5f] focus-visible:ring-offset-1 focus-visible:outline-none disabled:opacity-50"
+                  >
+                    {assigningStudents ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <UserPlus className="h-3.5 w-3.5" />
+                    )}
+                    {assignMode === "copy" ? "Assign Selected" : "Move Selected"} (
+                    {selectedAssignIds.size})
+                  </button>
+                </div>
+              </div>
+            )}
 
             <form
               onSubmit={handleAddStudent}
@@ -982,7 +1559,7 @@ export function AdminClient() {
                 required
                 value={newStudentNis}
                 onChange={(e) => setNewStudentNis(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
               />
               <input
                 type="text"
@@ -990,7 +1567,7 @@ export function AdminClient() {
                 required
                 value={newStudentName}
                 onChange={(e) => setNewStudentName(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-xs sm:col-span-2"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-xs sm:col-span-2 focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
               />
               <div className="flex gap-2">
                 <input
@@ -998,11 +1575,11 @@ export function AdminClient() {
                   placeholder="Class (e.g. X IPA 2)"
                   value={newStudentKelas}
                   onChange={(e) => setNewStudentKelas(e.target.value)}
-                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
                 />
                 <button
                   type="submit"
-                  className="rounded-lg bg-[#1e3a5f] px-3 py-2 text-xs font-semibold text-white"
+                  className="rounded-lg bg-[#1e3a5f] px-3 py-2 text-xs font-semibold text-white hover:bg-[#162d4a] focus-visible:ring-2 focus-visible:ring-[#1e3a5f] focus-visible:ring-offset-1 focus-visible:outline-none"
                 >
                   Add
                 </button>
@@ -1021,25 +1598,36 @@ export function AdminClient() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {selectedRoomStudents.map((st) => (
-                    <tr key={st.id} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 font-medium">{st.student_no}</td>
-                      <td className="px-3 py-2 text-slate-500">{st.nis}</td>
-                      <td className="px-3 py-2 font-medium text-slate-900">
-                        {st.name}
-                      </td>
-                      <td className="px-3 py-2 text-slate-600">{st.kelas}</td>
-                      <td className="px-3 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteStudent(st)}
-                          className="text-rose-600 hover:underline"
-                        >
-                          Remove
-                        </button>
+                  {selectedRoomStudents.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-4 py-6 text-center text-xs text-slate-600"
+                      >
+                        No students assigned to this room yet. Add students above, assign existing students, or import via CSV.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    selectedRoomStudents.map((st) => (
+                      <tr key={st.id} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 font-medium">{st.student_no}</td>
+                        <td className="px-3 py-2 text-slate-600">{st.nis}</td>
+                        <td className="px-3 py-2 font-medium text-slate-900">
+                          {st.name}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">{st.kelas}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStudent(st)}
+                            className="text-rose-600 hover:underline focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:outline-none"
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1048,7 +1636,7 @@ export function AdminClient() {
               <div className="mb-1 text-xs font-semibold text-slate-800">
                 Bulk Import Students (CSV)
               </div>
-              <p className="mb-2 text-[11px] text-slate-500">
+              <p className="mb-2 text-[11px] text-slate-600">
                 Paste lines as <code>NIS, NAME, CLASS</code> or{" "}
                 <code>NO, NIS, NAME, CLASS</code>
               </p>
@@ -1057,13 +1645,13 @@ export function AdminClient() {
                 value={bulkCsv}
                 onChange={(e) => setBulkCsv(e.target.value)}
                 placeholder="262710099, AHMAD FAUZAN, X IPA 1"
-                className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs"
+                className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs focus:border-[#1e3a5f] focus-visible:ring-2 focus-visible:ring-[#1e3a5f]/30 focus-visible:outline-none"
               />
               <div className="mt-2 flex justify-end">
                 <button
                   type="button"
                   onClick={handleBulkImport}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-[#1e3a5f] focus-visible:outline-none"
                 >
                   <Upload className="h-3.5 w-3.5" />
                   Import to Room

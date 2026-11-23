@@ -135,6 +135,9 @@ export const DEFAULT_FORM_FIELDS: FormField[] = [
       "RUANG 9 - IKHWAN",
       "RUANG 10 - IKHWAN",
       "RUANG 11 - IKHWAN",
+      "PRAKTIKUM FISIKA SESI 1 - IKHWAN",
+      "PRAKTIKUM FISIKA SESI 2 - AKHWAT",
+      "PRAKTIKUM FISIKA SESI 3 - AKHWAT",
     ],
     section: "schedule",
     sort_order: 8,
@@ -148,7 +151,7 @@ export const DEFAULT_FORM_FIELDS: FormField[] = [
     description: null,
     field_type: "radio",
     required: true,
-    options: ["1st", "2nd"],
+    options: ["1st", "2nd", "3rd"],
     section: "schedule",
     sort_order: 9,
     is_active: true,
@@ -298,6 +301,9 @@ export const DEFAULT_ROOMS: Room[] = [
   { id: "room-9", name: "RUANG 9 - IKHWAN", category: "IKHWAN", sort_order: 9, is_active: true },
   { id: "room-10", name: "RUANG 10 - IKHWAN", category: "IKHWAN", sort_order: 10, is_active: true },
   { id: "room-11", name: "RUANG 11 - IKHWAN", category: "IKHWAN", sort_order: 11, is_active: true },
+  { id: "room-12", name: "PRAKTIKUM FISIKA SESI 1 - IKHWAN", category: "IKHWAN", sort_order: 12, is_active: true },
+  { id: "room-13", name: "PRAKTIKUM FISIKA SESI 2 - AKHWAT", category: "AKHWAT", sort_order: 13, is_active: true },
+  { id: "room-14", name: "PRAKTIKUM FISIKA SESI 3 - AKHWAT", category: "AKHWAT", sort_order: 14, is_active: true },
 ];
 
 type RawStudentTuple = [string, number, string, string, string];
@@ -489,6 +495,52 @@ const RAW_STUDENTS: RawStudentTuple[] = [
   ["room-11", 6, "242510063", "RAIHAN SHAHREZA HASIBUAN", "XII IPA 1"],
   ["room-11", 7, "242510052", "SAVERO KUMARA FAWWAZ", "XII IPA 1"],
   ["room-11", 8, "242510053", "SAYYIDINA ARAI YASEH", "XII IPS 1"],
+
+  // PRAKTIKUM FISIKA SESI 1 - IKHWAN (07.30 - 08.30)
+  ["room-12", 1, "262710066", "AMANDO SAKTIKA ARDHANI", "X IPA 1"],
+  ["room-12", 2, "262710063", "XANDER NATHANIEL BUDIYANTO", "X IPA 1"],
+  ["room-12", 3, "262710009", "ATTALAH RADITYA HAKIM", "X IPA 1"],
+  ["room-12", 4, "262710059", "SYAZWI SALEH", "X IPA 1"],
+  ["room-12", 5, "262710016", "DHAFFY RAFISQY RAMADHAN HARTONO", "X IPA 1"],
+  ["room-12", 6, "262710054", "RAJA DARIAN KSATRIA", "X IPA 1"],
+  ["room-12", 7, "262710021", "FARREL AHNAF GINTING", "X IPA 1"],
+  ["room-12", 8, "262710065", "RAHMAT ADRIAN SITORUS", "X IPA 1"],
+  ["room-12", 9, "262710025", "GERALD ATHALLAH AYUNG", "X IPA 1"],
+  ["room-12", 10, "262710053", "RAFA HAYFA SASMITA", "X IPA 1"],
+  ["room-12", 11, "262710067", "HAIBAN AMANULLAH RUSYDAN", "X IPA 1"],
+  ["room-12", 12, "262710052", "RADHIKA ARSYA ADHYASTHA", "X IPA 1"],
+  ["room-12", 13, "262710038", "MUHAMMAD ABYAN AKMAL WAFA", "X IPA 1"],
+  ["room-12", 14, "262710049", "PRINCE NAVEEN YUMASA", "X IPA 1"],
+  ["room-12", 15, "262710041", "MUHAMMAD FATHAN MUBIINA", "X IPA 1"],
+  ["room-12", 16, "262710048", "PRAWIRA RAFIF HAMBALI", "X IPA 1"],
+  ["room-12", 17, "262710042", "MUHAMMAD KENZIE ABIE", "X IPA 1"],
+  ["room-12", 18, "262710068", "MUHAMMAD TORIQ AL AKBAR", "X IPA 1"],
+
+  // PRAKTIKUM FISIKA SESI 2 - AKHWAT (09.00 - 10.00)
+  ["room-13", 1, "262710010", "AUDREY ATHA NITYASA", "X IPA 2"],
+  ["room-13", 2, "262710057", "RESTA PUTRI ODELIA RAHMAH", "X IPA 3"],
+  ["room-13", 3, "262710014", "CARISSA ZHAFIRA ZIARAMADHAN", "X IPA 2"],
+  ["room-13", 4, "262710047", "ODHELIA HUTRI MADHANEA", "X IPA 3"],
+  ["room-13", 5, "262710017", "ELVIRA NATAVIA MAYPUTRI HASAN", "X IPA 2"],
+  ["room-13", 6, "262710046", "NAZMA EISHA SELVANA", "X IPA 3"],
+  ["room-13", 7, "262710019", "FADIYAH NIDA NAIFAH", "X IPA 2"],
+  ["room-13", 8, "262710032", "KHANZA HAYFA SAKHI", "X IPA 3"],
+  ["room-13", 9, "262710029", "JIHAN KHANSA ADZKIYA HELGA", "X IPA 2"],
+  ["room-13", 10, "262710031", "KEISHA SHAQILE PRASETYA", "X IPA 3"],
+  ["room-13", 11, "262710030", "KAYYISA MAZEA ARLYM", "X IPA 2"],
+  ["room-13", 12, "262710027", "HASYA RENATA PUTRI", "X IPA 3"],
+
+  // PRAKTIKUM FISIKA SESI 3 - AKHWAT (10.30 - 11.30)
+  ["room-14", 1, "262710045", "NAMIRA MAHARANI REYHALIL", "X IPA 2"],
+  ["room-14", 2, "262710026", "HASFAH PUTRI SAFANA", "X IPA 3"],
+  ["room-14", 3, "262710050", "QUEENZA ANNISAVA HERRI", "X IPA 2"],
+  ["room-14", 4, "262710024", "GENDIS NAWIRA ANWAR", "X IPA 3"],
+  ["room-14", 5, "262710058", "SYAQUILA JANEETA LAURIE", "X IPA 2"],
+  ["room-14", 6, "262710012", "BELVA CALLISTA", "X IPA 3"],
+  ["room-14", 7, "262710060", "TARA AZKIA HALONA YUSTISIO", "X IPA 2"],
+  ["room-14", 8, "262710007", "ARINA ZAHIRA", "X IPA 3"],
+  ["room-14", 9, "262710062", "WANDA ZHAFIRA NUR IZZATUNNISA", "X IPA 2"],
+  ["room-14", 10, "262710003", "ALVIRA NAUROH SAAJIDAH", "X IPA 3"],
 ];
 
 export const DEFAULT_STUDENTS: Student[] = RAW_STUDENTS.map(
